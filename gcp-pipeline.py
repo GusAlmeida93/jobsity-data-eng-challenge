@@ -6,6 +6,7 @@ from airflow.providers.google.cloud.operators.dataproc import DataprocCreateClus
 from airflow.providers.google.cloud.sensors.dataproc import DataprocJobSensor
 from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator, BigQueryDeleteTableOperator, BigQueryCheckOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.telegram.operators.telegram import TelegramOperator
 
 
 GCP_PROJECT_ID = os.environ["GCP_PROJECT_ID"]
@@ -18,6 +19,7 @@ DATAPROC_CLUSTER_NAME = os.environ["DATAPROC_CLUSTER_NAME"]
 PYSPARK_URI = os.environ["PYSPARK_URI"]
 BQ_DATASET_NAME = os.environ["BQ_DATASET_NAME"]
 BQ_TABLE_NAME = os.environ["BQ_TABLE_NAME"]
+CHAT_ID = os.environ["CHAT_ID"]
 
 default_args = {
     'owner': 'gustavo almeida',
@@ -42,6 +44,13 @@ with DAG(
         storage_class="REGIONAL",
         location=LOCATION,
         labels={"env": "dev", "team": "airflow"}
+    )
+    
+    send_message_telegram_bucket = TelegramOperator(
+        task_id='send_message_telegram_bucket',
+        telegram_conn_id='telegram_conn_id',
+        chat_id=CHAT_ID,
+        text= f'Processing bucket created at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
     )
 
     gcs_sync_trips_landing_to_processing_zone = GCSSynchronizeBucketsOperator(
@@ -76,6 +85,13 @@ with DAG(
         region=REGION,
         use_if_exists=True    
         )
+    
+    send_message_telegram_dataproc = TelegramOperator(
+        task_id='send_message_telegram_dataproc',
+        telegram_conn_id='telegram_conn_id',
+        chat_id=CHAT_ID,
+        text= f'Dataproc cluster created at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    )
 
     job_py_spark_trips = {
         "reference": {"project_id": GCP_PROJECT_ID},
@@ -90,7 +106,14 @@ with DAG(
         job=job_py_spark_trips,
         asynchronous=True
     )
-
+    
+    send_message_telegram_dataproc_job = TelegramOperator(
+        task_id='send_message_telegram_dataproc_job',
+        telegram_conn_id='telegram_conn_id',
+        chat_id=CHAT_ID,
+        text= f'Dataproc job started at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    )
+    
     dataproc_job_sensor = DataprocJobSensor(
         task_id="dataproc_job_sensor",
         project_id=GCP_PROJECT_ID,
@@ -107,8 +130,8 @@ with DAG(
     ingest_dt_into_bq_table_trips = GCSToBigQueryOperator(
         task_id="ingest_dt_into_bq_table_trips",
         bucket=CURATED_BUCKET_ZONE,
-        source_objects=['ds_trips/*.parquet'],
-        destination_project_dataset_table=f'{GCP_PROJECT_ID}:{BQ_DATASET_NAME}.{BQ_TABLE_NAME}',
+        source_objects=['ds_trips/trips/*.parquet'],
+        destination_project_dataset_table=f'{GCP_PROJECT_ID}:{BQ_DATASET_NAME}.trips',
         source_format='parquet',
         write_disposition='WRITE_TRUNCATE',
         skip_leading_rows=1,
@@ -116,13 +139,26 @@ with DAG(
         bigquery_conn_id ='bigquery_default',
         google_cloud_storage_conn_id='bigquery_default'
     )
-
-    check_bq_trips_tb_count = BigQueryCheckOperator(
-            task_id="check_bq_trips_tb_count",
-            sql=f"SELECT COUNT(*) FROM {BQ_DATASET_NAME}.{BQ_TABLE_NAME}",
-            use_legacy_sql=False,
-            location="us"
-        )
+    
+    ingest_dt_into_bq_table_avg_trips_region = GCSToBigQueryOperator(
+        task_id="ingest_dt_into_bq_table_avg_trips_region",
+        bucket=CURATED_BUCKET_ZONE,
+        source_objects=['ds_trips/avg_trips_region/*.parquet'],
+        destination_project_dataset_table=f'{GCP_PROJECT_ID}:{BQ_DATASET_NAME}.avg_trips_region',
+        source_format='parquet',
+        write_disposition='WRITE_TRUNCATE',
+        skip_leading_rows=1,
+        autodetect=True,
+        bigquery_conn_id ='bigquery_default',
+        google_cloud_storage_conn_id='bigquery_default'
+    )
+    
+    send_message_telegram_tables_ingest = TelegramOperator(
+        task_id='send_message_telegram_tables_ingest',
+        telegram_conn_id='telegram_conn_id',
+        chat_id=CHAT_ID,
+        text= f'Tables updated at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    )
 
     delete_dataproc_cluster = DataprocDeleteClusterOperator(
         task_id="delete_dataproc_cluster",
@@ -130,10 +166,18 @@ with DAG(
         region=REGION,
         cluster_name=DATAPROC_CLUSTER_NAME
     )
+    
 
     delete_bucket_processing_zone = GCSDeleteBucketOperator(
         task_id="delete_bucket_processing_zone",
         bucket_name=PROCESSING_BUCKET_ZONE
     )
+    
+    send_message_telegram_pipeline_success = TelegramOperator(
+        task_id='send_message_telegram_pipeline_success',
+        telegram_conn_id='telegram_conn_id',
+        chat_id=CHAT_ID,
+        text= f'Pipeline Success at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    )
 
-create_gcs_processing_bucket >> gcs_sync_trips_landing_to_processing_zone >> list_files_processing_zone >> create_dataproc_cluster >> py_spark_job_submit >> dataproc_job_sensor >> bq_create_dataset_trips >> ingest_dt_into_bq_table_trips >> check_bq_trips_tb_count >> [delete_dataproc_cluster, delete_bucket_processing_zone]
+create_gcs_processing_bucket >> send_message_telegram_bucket >> gcs_sync_trips_landing_to_processing_zone >> list_files_processing_zone >> create_dataproc_cluster >> send_message_telegram_dataproc >> py_spark_job_submit >> send_message_telegram_dataproc_job >> dataproc_job_sensor >> bq_create_dataset_trips >> [ingest_dt_into_bq_table_trips, ingest_dt_into_bq_table_avg_trips_region] >> send_message_telegram_tables_ingest >> [delete_dataproc_cluster, delete_bucket_processing_zone] >> send_message_telegram_pipeline_success
