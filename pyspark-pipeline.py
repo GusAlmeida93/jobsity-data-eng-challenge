@@ -35,6 +35,28 @@ if __name__ == '__main__':
     
     df = df.withColumn('year', F.year(df['timestamp']))
     
+    matching = r'[a-zA-Z]'
+
+    df = df.withColumn('output', F.split('origin_coord', matching))
+    df = df.withColumn('output', F.array_remove('output', ''))
+    df = df.withColumn('output', F.concat_ws(',', F.col('output')))
+    df = df.withColumn('output', F.regexp_replace('output', '\(', '') )
+    df = df.withColumn('output', F.regexp_replace('output', '\)', '') )
+    df = df.withColumn('output', F.split(F.col('output'),' '))
+    df = df.withColumn('origin_lat', df['output'].getItem(1))
+    df = df.withColumn('origin_long', df['output'].getItem(2))
+    df = df.drop(F.col('output'))
+    
+    df = df.withColumn('output', F.split('destination_coord', matching))
+    df = df.withColumn('output', F.array_remove('output', ''))
+    df = df.withColumn('output', F.concat_ws(',', F.col('output')))
+    df = df.withColumn('output', F.regexp_replace('output', '\(', '') )
+    df = df.withColumn('output', F.regexp_replace('output', '\)', '') )
+    df = df.withColumn('output', F.split(F.col('output'),' '))
+    df = df.withColumn('destination_lat', df['output'].getItem(1))
+    df = df.withColumn('destination_long', df['output'].getItem(2))
+    df = df.drop(F.col('output'))
+    
     df_avg_region = df.groupBy('region', 'year','week_year').agg(F.count('region').alias('count_region'))
     
     df.write.format("parquet").mode("overwrite").save(f'{destination_path}/trips')
