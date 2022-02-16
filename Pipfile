@@ -4,9 +4,6 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-google-cloud-storage = "*"
-google-api-python-client = "*"
-google-cloud-iam = "*"
 
 [dev-packages]
 
